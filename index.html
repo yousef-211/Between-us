@@ -818,7 +818,20 @@
 <body>
 
 <div id="app" dir="rtl" lang="ar">
-  <div class="onboarding" id="onboarding">
+  <div class="onboarding" id="gateScreen">
+    <div class="onboarding-card">
+      <div class="onboarding-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+      </div>
+      <h1>بيننا</h1>
+      <p>هذا المكان خاص فيكم بس. اكتبوا كلمة السر عشان تدخلوا.</p>
+      <input id="gateInput" type="password" placeholder="كلمة السر" autocomplete="off" style="width:100%;padding:13px 16px;border-radius:14px;border:1.5px solid var(--border);background:var(--surface-2);color:var(--text);font-size:1rem;outline:none;text-align:center;" />
+      <button class="primary-btn" id="gateSubmit">دخول</button>
+      <div id="gateError" style="color:var(--her);font-size:0.82rem;margin-top:10px;" hidden>كلمة السر غلط، حاولوا مرة ثانية.</div>
+    </div>
+  </div>
+
+  <div class="onboarding" id="onboarding" hidden>
     <div class="onboarding-card">
       <div class="onboarding-mark">
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 8.6c0-3-2.3-5.3-5.1-5.3-1.9 0-3.6 1.1-4.5 2.7-.9-1.6-2.6-2.7-4.5-2.7C3.9 3.3 1.6 5.7 1.6 8.6c0 5.6 9.6 11 9.6 11s9.6-5.4 9.6-11z"/></svg>
@@ -1102,7 +1115,6 @@
 <!-- Firebase (compat SDK) — real shared backend, replaces the Claude-Artifact-only db capability -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
 
 <script>
 (function(){
@@ -1131,7 +1143,7 @@
       '<li>من إعدادات المشروع ⚙ → Project settings → أضيفوا تطبيق ويب (Web app).</li>' +
       '<li>انسخوا كائن <code>firebaseConfig</code> اللي يطلع لكم.</li>' +
       '<li>افتحوا ملف <code>index.html</code> والصقوه مكان <code>firebaseConfig</code> بأول السكربت.</li>' +
-      '<li>فعّلوا <code>Firestore Database</code> و <code>Storage</code> من القائمة الجانبية بنفس المشروع.</li>' +
+      '<li>فعّلوا <code>Firestore Database</code> من القائمة الجانبية بنفس المشروع (Start in test mode).</li>' +
       '</ol>' +
       '</div></div>';
     return;
@@ -1139,15 +1151,34 @@
 
   firebase.initializeApp(firebaseConfig);
   var db = firebase.firestore();
-  var storageBucket = firebase.storage();
+
+  /* الصور تُضغط بالجهاز نفسه وتُخزّن مباشرة جوا مستند Firestore —
+     ما نحتاج Firebase Storage (اللي صار يتطلب بطاقة بنكية)، ويضل كل شي مجاني بالكامل. */
+  function resizeImageToDataURL(file, maxDim, quality){
+    return new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onload = function(e){
+        var img = new Image();
+        img.onload = function(){
+          var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          var cw = Math.max(1, Math.round(img.width * scale));
+          var ch = Math.max(1, Math.round(img.height * scale));
+          var canvas = document.createElement("canvas");
+          canvas.width = cw; canvas.height = ch;
+          canvas.getContext("2d").drawImage(img, 0, 0, cw, ch);
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        };
+        img.onerror = function(){ reject(new Error("bad image")); };
+        img.src = e.target.result;
+      };
+      reader.onerror = function(){ reject(new Error("read failed")); };
+      reader.readAsDataURL(file);
+    });
+  }
   var assetsApi = {
     upload: function(file){
-      var path = "uploads/" + Date.now() + "_" + Math.random().toString(36).slice(2) + "_" + file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      var ref = storageBucket.ref(path);
-      return ref.put(file).then(function(snapshot){
-        return snapshot.ref.getDownloadURL();
-      }).then(function(url){
-        return { id: path, url: url };
+      return resizeImageToDataURL(file, 900, 0.55).then(function(dataUrl){
+        return { id: "img_" + Date.now() + "_" + Math.random().toString(36).slice(2), url: dataUrl };
       });
     }
   };
@@ -1237,6 +1268,7 @@
 
   var el = {};
   [
+    "gateScreen","gateInput","gateSubmit","gateError",
     "onboarding","whoChoices","whoOtherBtn","customNameWrap","nameInput","startBtn",
     "mainApp","settingsBtn",
     "statPillWrap","statPill","statPillText",
@@ -2274,20 +2306,51 @@
     }
   }
 
+  /* ---------------- passcode gate ---------------- */
+  var LS_UNLOCKED = "baynana:unlocked";
+  var PASSCODE = "love u mine";
+  function normalizeCode(s){ return (s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+  function tryUnlock(){
+    if (normalizeCode(el.gateInput.value) === PASSCODE){
+      localStorage.setItem(LS_UNLOCKED, "1");
+      el.gateScreen.hidden = true;
+      el.gateError.hidden = true;
+      startApp();
+    } else {
+      el.gateError.hidden = false;
+      el.gateInput.value = "";
+      el.gateInput.focus();
+    }
+  }
+  el.gateSubmit.addEventListener("click", tryUnlock);
+  el.gateInput.addEventListener("keydown", function(e){ if (e.key === "Enter") tryUnlock(); });
+
   /* ---------------- boot ---------------- */
-  function boot(){
+  function startApp(){
     if (me){
       el.onboarding.hidden = true;
       el.mainApp.hidden = false;
       el.memoryDate.value = todayStr();
       buildSettingsWho();
       subscribeAll();
+    } else {
+      el.onboarding.hidden = false;
     }
     maybeShowIOSBanner();
     maybeFireMorningReminder();
 
     if ("serviceWorker" in navigator){
       navigator.serviceWorker.register("service-worker.js").catch(function(){});
+    }
+  }
+
+  function boot(){
+    if (localStorage.getItem(LS_UNLOCKED) === "1"){
+      el.gateScreen.hidden = true;
+      startApp();
+    } else {
+      el.gateScreen.hidden = false;
+      el.gateInput.focus();
     }
   }
 
